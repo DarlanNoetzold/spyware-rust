@@ -7,13 +7,7 @@ edition = "2018"
 
 
 [dependencies]
-reqwest = "0.11"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-image = "0.23"
-psutil = "3.2"
-screenshot = "0.0.5"
-base64 = "0.12"
-nix = "0.27"
-
-
+serde = "1"
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
