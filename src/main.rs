@@ -3,12 +3,15 @@ use std::thread;
 use std::time::Duration;
 use reqwest;
 use std::fs::File;
-use serde_json::{json, Value}; 
+use serde_json::{json, Value};
 use std::io::Write;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::prelude::*;
+use std::process::Command;
 
-
-#[tokio::main] // Anote a função main para usarmos o runtime do tokio.
-async fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Iniciou o programa!");
     if let Err(err) = update_aux_data().await {
         eprintln!("Erro ao atualizar dados auxiliares: {:?}", err);
@@ -30,6 +33,12 @@ async fn main() {
     }
 }
 
+// ... Resto do código existente ...
+
+fn keylogger() {
+    // Resto do código...
+}
+
 fn sniffer(tx: std::sync::mpsc::Sender<String>) {
     // Resto do código...
 }
@@ -38,9 +47,6 @@ fn scanner(tx: std::sync::mpsc::Sender<String>) {
     // Resto do código...
 }
 
-fn keylogger() {
-    // Resto do código...
-}
 
 async fn update_aux_data() -> Result<(), Box<dyn std::error::Error>> {
     // Fazer login e obter o token
@@ -114,4 +120,187 @@ async fn do_login() -> Result<String, Box<dyn std::error::Error>> {
 
     let token = response.text().await?;
     Ok(token)
+}
+
+fn get_shift_chars() -> HashMap<&'static str, char> {
+    let mut shift_chars = HashMap::new();
+    shift_chars.insert("Shift + 1", '!');
+    shift_chars.insert("Shift + 2", '@');
+    shift_chars.insert("Shift + 3", '#');
+    // Adicione outros caracteres aqui, se necessário
+    shift_chars
+}
+
+async fn is_hate_speech(log: &str) -> bool {
+    let data_logs = json!({"valor": 0, "frase": log});
+    let client = reqwest::Client::new();
+    let res = client
+        .post("http://127.0.0.1:5000/predict")
+        .json(&data_logs)
+        .send()
+        .await;
+
+    if let Ok(response) = res {
+        if response.status() == reqwest::StatusCode::OK {
+            let hate_speech: Vec<HashMap<String, i32>> = response.json().await.unwrap_or_default();
+
+            if let Some(hate_speech_json) = hate_speech.get(0) {
+                if let Some(valor) = hate_speech_json.get("valor") {
+                    if *valor == 1 {
+                        println!("Geração de alerta por discurso de ódio: {}", log);
+                        println!("{:?}", hate_speech_json);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+
+async fn verifyng_hate_speech_chatGPT(text: &str) -> bool {
+    let openai_api_key = "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";
+    let prompt = format!(
+        r#"Identifique se essa frase tem discurso de ódio: "{}". Responda com sim ou não"#,
+        text
+    );
+    let request_body = json!({
+        "model": "text-davinci-003",
+        "prompt": prompt,
+        "temperature": 0.6,
+    });
+
+    let client = reqwest::Client::new();
+
+    match client
+        .post("https://api.openai.com/v1/engines/text-davinci-003/completions")
+        .header("Authorization", format!("Bearer {}", openai_api_key))
+        .json(&request_body)
+        .send()
+        .await
+    {
+        Ok(response) => {
+            if let Ok(body) = response.json::<HashMap<String, Vec<HashMap<String, String>>>>().await {
+                if let Some(choices) = body.get("choices") {
+                    if !choices.is_empty() {
+                        if let Some(text) = choices[0].get("text") {
+                            if text.to_lowercase().starts_with("sim") {
+                                println!("Geração de alerta por discurso de ódio no ChatGPT: {}", text);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            println!("ChatGPT está off!");
+        }
+    }
+
+    false
+}
+
+fn is_bad_language(log: &str) -> bool {
+    let log_tokenized = log.split_whitespace();
+    if let Ok(file_contents) = std::fs::read_to_string(r"C:\keyLogger\badLanguage.txt") {
+        let bad_words: Vec<&str> = file_contents.split(';').collect();
+        for word in log_tokenized {
+            if bad_words.contains(&word.to_lowercase().as_str()) {
+                println!("Palavra que gerou o alerta: {}", word);
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn are_malicious_process(log: &str) -> bool {
+    if let Ok(file_contents) = std::fs::read_to_string(r"C:\keyLogger\maliciousProcess.txt") {
+        let malicious_processes: Vec<&str> = file_contents.split(';').collect();
+        for line in log.lines() {
+            for proc in malicious_processes.iter() {
+                if line.to_lowercase().contains(&proc.to_lowercase()) {
+                    println!("Alerta gerado por causa do processo: {}", proc);
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn get_process() -> String {
+    let mut info_set = HashSet::new();
+
+    if let Ok(processes) = psutil::process::processes() {
+        for process in processes {
+            if let Ok(info) = process.as_dict(&["pid", "name"]) {
+                if let Some(name) = info.get("name") {
+                    info_set.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    info_set.into_iter().collect::<Vec<String>>().join(",")
+}
+
+fn get_image() -> Result<String, Box<dyn std::error::Error>> {
+    let image = image::screenshot()?;
+    let mut buffer = Vec::new();
+
+    image.write_to(&mut buffer, image::ImageOutputFormat::PNG)?;
+
+    let b64_str = base64::encode(buffer);
+
+    Ok(b64_str)
+}
+
+async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let headers = do_login().await?;
+    let has_error: bool;
+
+    let image_result = get_image();
+    if image_result.is_err() {
+        println!("Error to send Image\n{:?}", image_result.err().unwrap());
+        has_error = true;
+    }
+
+    let data_alert = if has_error {
+        json!({"pcId": gma(), "processos": get_process()})
+    } else {
+        json!({"pcId": gma(), "imagem": {"id": image_result.unwrap()}, "processos": get_process()})
+    };
+
+    let client = reqwest::Client::new();
+    match client
+        .post("http://localhost:8091/alert/save")
+        .headers(headers)
+        .json(&data_alert)
+        .send()
+        .await
+    {
+        Ok(alert) => {
+            println!("{:?}", alert);
+            println!("Alert Saved!");
+        }
+        Err(err) => {
+            println!("Error to send Alert\n{:?}", err);
+        }
+    }
+
+    Ok(())
+}
+
+async fn report(log: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if is_hate_speech(log).await || is_bad_language(log) || are_malicious_process(log) || verifyng_hate_speech_chatGPT(log).await {
+        println!("Foi enviado o report!");
+        send_alert(log).await?;
+    }
+    Ok(())
 }
