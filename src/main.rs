@@ -6,9 +6,12 @@ use std::fs::File;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::prelude::*;
 use std::process::Command;
+use reqwest::header::HeaderMap;
+use psutil::process::{Process, ProcessResult};
+use std::collections::HashSet;
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -237,9 +240,9 @@ fn are_malicious_process(log: &str) -> bool {
 fn get_process() -> String {
     let mut info_set = HashSet::new();
 
-    if let Ok(processes) = psutil::process::processes() {
+    if let Ok(processes) = Process::all() {
         for process in processes {
-            if let Ok(info) = process.as_dict(&["pid", "name"]) {
+            if let Ok(info) = process.as_dict() {
                 if let Some(name) = info.get("name") {
                     info_set.insert(name.to_string());
                 }
@@ -263,6 +266,8 @@ fn get_image() -> Result<String, Box<dyn std::error::Error>> {
 
 async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
     let headers = do_login().await?;
+    let mut headers = HeaderMap::new();
+    headers.insert("Authorization", format!("Bearer {}", token).parse()?);
     let has_error: bool;
 
     let image_result = get_image();
