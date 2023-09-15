@@ -9,8 +9,19 @@ use std::collections::HashMap;
 use std::io::prelude::*;
 use std::process::Command;
 use reqwest::header::HeaderMap;
-use psutil::process::{Process, ProcessResult};
-use std::collections::HashSet;
+extern crate winapi;
+
+use std::ptr;
+use std::mem;
+use std::ffi::OsString;
+use winapi::um::tlhelp32::*;
+use winapi::um::winnt::*;
+use winapi::um::handleapi::*;
+use winapi::um::processthreadsapi::*;
+use winapi::um::psapi::*;
+extern crate mac_address;
+
+use mac_address::get_mac_address;
 
 
 #[tokio::main]
@@ -237,21 +248,50 @@ fn are_malicious_process(log: &str) -> bool {
     false
 }
 
-fn get_process() -> String {
-    let mut info_set = HashSet::new();
+fn get_mac_as_string() -> String {
+    match get_mac_address() {
+        Ok(Some(mac)) => mac.to_string(),
+        _ => "MAC Address not found".to_string(),
+    }
+}
 
-    if let Ok(processes) = Process::all() {
-        for process in processes {
-            if let Ok(info) = process.as_dict() {
-                if let Some(name) = info.get("name") {
-                    info_set.insert(name.to_string());
+fn get_process() -> String {
+    let mut process_names = Vec::new();
+
+    let mut process_entry: PROCESSENTRY32 = unsafe { mem::zeroed() };
+    process_entry.dwSize = mem::size_of::<PROCESSENTRY32>() as u32;
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+
+    if snapshot == INVALID_HANDLE_VALUE {
+        println!("Error: CreateToolhelp32Snapshot failed");
+        return "".to_string();
+    }
+
+    if unsafe { Process32First(snapshot, &mut process_entry) } == 1 {
+        while unsafe { Process32Next(snapshot, &mut process_entry) } == 1 {
+            let process_name = unsafe {
+                let mut len = 0;
+                while process_entry.szExeFile[len] != 0 {
+                    len += 1;
                 }
-            }
+                let bytes = &process_entry.szExeFile[0..len] as *const _ as *const u8;
+                String::from_utf8_lossy(std::slice::from_raw_parts(bytes, len))
+            };
+
+            process_names.push(process_name.to_string());
         }
     }
 
-    info_set.into_iter().collect::<Vec<String>>().join(",")
+    unsafe {
+        CloseHandle(snapshot);
+    }
+
+    process_names.join(",")
 }
+
+
+
 
 fn get_image() -> Result<String, Box<dyn std::error::Error>> {
     let image = image::screenshot()?;
@@ -265,7 +305,7 @@ fn get_image() -> Result<String, Box<dyn std::error::Error>> {
 }
 
 async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let headers = do_login().await?;
+    let token = do_login().await?;
     let mut headers = HeaderMap::new();
     headers.insert("Authorization", format!("Bearer {}", token).parse()?);
     let has_error: bool;
@@ -277,9 +317,9 @@ async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let data_alert = if has_error {
-        json!({"pcId": gma(), "processos": get_process()})
+        json!({"pcId": get_mac_as_string(), "processos": get_process()})
     } else {
-        json!({"pcId": gma(), "imagem": {"id": image_result.unwrap()}, "processos": get_process()})
+        json!({"pcId": get_mac_as_string(), "imagem": {"id": image_result.unwrap()}, "processos": get_process()})
     };
 
     let client = reqwest::Client::new();
