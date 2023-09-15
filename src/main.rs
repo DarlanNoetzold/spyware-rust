@@ -21,6 +21,11 @@ use winapi::um::processthreadsapi::*;
 use winapi::um::psapi::*;
 extern crate mac_address;
 
+use image::RgbaImage;
+use win_screenshot::prelude::capture_display;
+use image::{DynamicImage, GenericImageView};
+use base64::{encode, decode};
+
 use mac_address::get_mac_address;
 
 
@@ -291,54 +296,62 @@ fn get_process() -> String {
 }
 
 
+fn get_image() -> String {
+    let buf = capture_display().unwrap();
+    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(buf.width, buf.height, buf.pixels).unwrap());
 
+    let resized_img = img.resize(800, 600, image::imageops::FilterType::Lanczos3);
 
-fn get_image() -> Result<String, Box<dyn std::error::Error>> {
-    let image = image::screenshot()?;
-    let mut buffer = Vec::new();
+    resized_img.save("screenshot.png").unwrap();
 
-    image.write_to(&mut buffer, image::ImageOutputFormat::PNG)?;
+    let mut file = File::open("screenshot.png").unwrap();
+    let mut image_data = Vec::new();
+    file.read_to_end(&mut image_data).unwrap();
+    let encoded_image = encode(&image_data);
 
-    let b64_str = base64::encode(buffer);
-
-    Ok(b64_str)
+    encoded_image
 }
 
 async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
     let token = do_login().await?;
     let mut headers = HeaderMap::new();
     headers.insert("Authorization", format!("Bearer {}", token).parse()?);
-    let has_error: bool;
 
-    let image_result = get_image();
-    if image_result.is_err() {
-        println!("Error to send Image\n{:?}", image_result.err().unwrap());
-        has_error = true;
-    }
-
-    let data_alert = if has_error {
-        json!({"pcId": get_mac_as_string(), "processos": get_process()})
-    } else {
-        json!({"pcId": get_mac_as_string(), "imagem": {"id": image_result.unwrap()}, "processos": get_process()})
-    };
+    let image_data = get_image();
 
     let client = reqwest::Client::new();
-    match client
+    
+    // Construir o objeto ImageData na requisição.
+    let image_response = client
+        .post("http://localhost:8091/image/save")
+        .headers(headers.clone())
+        .json(&json!({
+            "id": 0,
+            "productImg": log,
+            "base64Img": image_data,
+        }))
+        .send()
+        .await?;
+
+    let image_json: serde_json::Value = image_response.json().await?;
+    let image_id = image_json.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
+
+    // Construir o objeto AlertData na requisição.
+    let alert_response = client
         .post("http://localhost:8091/alert/save")
         .headers(headers)
-        .json(&data_alert)
+        .json(&json!({
+            "pcId": get_mac_as_string(),
+            "imagem": {
+                "id": image_id
+            },
+            "processos": get_process(),
+        }))
         .send()
-        .await
-    {
-        Ok(alert) => {
-            println!("{:?}", alert);
-            println!("Alert Saved!");
-        }
-        Err(err) => {
-            println!("Error to send Alert\n{:?}", err);
-        }
-    }
+        .await?;
 
+    println!("{:?}", alert_response);
+    println!("Alert Saved!");
     Ok(())
 }
 
