@@ -47,7 +47,7 @@ async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let sniffer_handle = thread::spawn(|| {
-        println!("Iniciou a thread do sniffer");
+        println!("Iniciou a thread do sniffer_handle");
         let rt = Runtime::new().unwrap();
         rt.block_on(sniffer());
     });
