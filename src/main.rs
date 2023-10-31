@@ -545,29 +545,13 @@ async fn send_alert(log: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let client = reqwest::Client::new();
     
-    // Construir o objeto ImageData na requisição.
-    let image_response = client
-        .post("http://localhost:9000/image")
-        .headers(headers.clone())
-        .json(&json!({
-            "productImg": log,
-            "base64Img": image_data,
-        }))
-        .send()
-        .await?;
-
-    let image_json: serde_json::Value = image_response.json().await?;
-    let image_id = image_json.get("id").and_then(|id| id.as_i64()).unwrap_or(0);
-
     // Construir o objeto AlertData na requisição.
     let alert_response = client
         .post("http://localhost:9000/alert")
         .headers(headers)
         .json(&json!({
             "pcId": get_mac_as_string(),
-            "image": {
-                "id": image_id
-            },
+            "image": image_data,
             "processos": get_process(),
         }))
         .send()
